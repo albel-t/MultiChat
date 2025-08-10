@@ -2,7 +2,6 @@
 import subjection
 import os
 
-TOKEN = subjection.bot_token
 LOG_FILE = subjection.log_file_name
 
 def PrintLogOut(massage):
