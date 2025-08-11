@@ -5,114 +5,90 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 import threading
 import sys
+import asyncio
 
 # Инициализация лог-файла
 InitLogFile()
 
 # Токен бота
 TOKEN = subjection.bot_token
-
-# Включим логирование, чтобы видеть ошибки
+CountMessages = 0
+# Настройка логирования
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Глобальная переменная для хранения chat_id с активным режимом перевода
-ACTIVE_TRANSLATE_CHATS = set()
+class TranslateMode:
+    def __init__(self):
+        self.active_chats = set()  # Хранит ID чатов с активным режимом
+    
+    def add_chat(self, chat_id):
+        self.active_chats.add(chat_id)
+    
+    def remove_chat(self, chat_id):
+        self.active_chats.discard(chat_id)
+    
+    def is_active(self, chat_id):
+        return chat_id in self.active_chats
 
-# Обработчик команды /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+translate_mode = TranslateMode()
+
+async def get_chat_info(update: Update):
+    """Получает информацию о чате и пользователе"""
+    chat = update.effective_chat
     user = update.effective_user
-    await update.message.reply_text(f"Привет, {user.mention_html()}! Я бот для отладки.", parse_mode="HTML")
-    PrintLogOut(f"User {user.id} started the bot")
+    
+    chat_info = {
+        'chat_id': chat.id,
+        'chat_title': chat.title if hasattr(chat, 'title') else "Личная переписка",
+        'user_name': user.full_name if user else "Неизвестный пользователь",
+        'user_id': user.id if user else None
+    }
+    return chat_info
 
-# Обработчик команды /help
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    help_text = """
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_info = await get_chat_info(update)
+    await update.message.reply_text(f"Привет, {chat_info['user_name']}! Я бот для отладки.")
+    PrintLogOut(f"User {chat_info['user_id']} started bot in chat {chat_info['chat_id']}")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = '''
 Доступные команды:
-/start - начать работу с ботом
-/help - показать это сообщение
-/debug - тестовая команда для отладки
-/translate - начать вывод сообщений в консоль
-/stoptranslate - остановить вывод сообщений в консоль
-"""
+/start - начать работу
+/help - справка
+/translate - начать вывод сообщений
+/stoptranslate - остановить вывод
+
+---------------
+''' + str(CountMessages) + ''' cообщений отправленно с момента включения бота!
+
+'''
     await update.message.reply_text(help_text)
-    PrintLogOut(f"User {update.effective_user.id} requested help")
 
-# Обработчик команды /debug
-async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Это тестовая команда для отладки.")
-    PrintLogOut(f"Debug command executed by {update.effective_user.id}")
-
-# Обработчик команды /translate
-async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    user = update.effective_user
+async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_info = await get_chat_info(update)
     
-    if chat_id in ACTIVE_TRANSLATE_CHATS:
-        await update.message.reply_text("Режим перевода уже включен для этого чата.")
+    if translate_mode.is_active(chat_info['chat_id']):
+        await update.message.reply_text("Режим перевода уже включен!")
     else:
-        ACTIVE_TRANSLATE_CHATS.add(chat_id)
-        await update.message.reply_text("Режим перевода включен. Все сообщения будут выводиться в консоль.")
-        PrintLogOut(f"Translate mode activated for chat {chat_id} by user {user.full_name} ({user.id})")
+        translate_mode.add_chat(chat_info['chat_id'])
+        await update.message.reply_text("✅ Режим перевода включен")
+        PrintLogOut(f"Translate ON in chat '{chat_info['chat_title']}' ({chat_info['chat_id']})")
 
-# Обработчик команды /stoptranslate
-async def stop_translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    user = update.effective_user
+async def stop_translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_info = await get_chat_info(update)
     
-    if chat_id in ACTIVE_TRANSLATE_CHATS:
-        ACTIVE_TRANSLATE_CHATS.remove(chat_id)
-        await update.message.reply_text("Режим перевода выключен. Сообщения больше не выводятся в консоль.")
-        PrintLogOut(f"Translate mode deactivated for chat {chat_id} by user {user.full_name} ({user.id})")
+    if translate_mode.is_active(chat_info['chat_id']):
+        translate_mode.remove_chat(chat_info['chat_id'])
+        await update.message.reply_text("❌ Режим перевода выключен")
+        PrintLogOut(f"Translate OFF in chat '{chat_info['chat_title']}' ({chat_info['chat_id']})")
     else:
-        await update.message.reply_text("Режим перевода не был активен для этого чата.")
+        await update.message.reply_text("Режим перевода не был активен")
 
-# Обработчик всех текстовых сообщений
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    
-    if chat_id in ACTIVE_TRANSLATE_CHATS:
-        user = update.effective_user
-        message_text = update.message.text
-        
-        # Формируем строку для вывода
-        output = f"Сообщение от {user.full_name} (ID: {user.id}): {message_text}"
-        print(output)  # Вывод в консоль
-        PrintLogOut(output)  # Запись в лог
-    else:
-        print(message_text)  # Вывод в консоль
-        PrintLogOut(message_text)  # Запись в лог
-# Функция для отправки сообщений из консоли
-def console_sender(application):
-    while True:
-        try:
-            console_input = input("Введите chat_id и сообщение (формат: chat_id:message): ")
-            if ":" in console_input:
-                chat_id, message = console_input.split(":", 1)
-                try:
-                    chat_id = int(chat_id.strip())
-                    message = message.strip()
-                    
-                    # Используем run_async для асинхронной отправки
-                    application.create_task(
-                        application.bot.send_message(chat_id=chat_id, text=message)
-                    )
-                    PrintLogOut(f"Message sent to chat {chat_id}: {message}")
-                except ValueError:
-                    PrintLogOut("Ошибка: chat_id должен быть числом")
-                except Exception as e:
-                    PrintLogOut(f"Ошибка при отправке сообщения: {str(e)}")
-            else:
-                PrintLogOut("Ошибка: используйте формат chat_id:message")
-        except KeyboardInterrupt:
-            PrintLogOut("Консольный ввод завершен")
-            break
-        except Exception as e:
-            PrintLogOut(f"Ошибка в консольном вводе: {str(e)}")
-
-async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    PrintLogOut(f"New message!")
     try:
         user = update.effective_user
         chat = update.effective_chat
@@ -124,34 +100,62 @@ async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content = f"[MEDIA] {message.caption}"
         else:
             content = "[NON-TEXT CONTENT]"
+        log_entry = f"[{subjection.names[user.first_name]}]: {content}\n" 
         if (content[0] != ".") and ((chat.title or 'private') in subjection.active_chats):
-            log_entry = f"[] {subjection.names[user.first_name]}: {content}\n"
-            PrintLogOut(f"New Message  -  {log_entry[:100]}")
+            PrintLogOut(f"{log_entry[:100]}")
+
 
     except Exception as e:
         PrintLogOut(f"Ошибка: {e}")
-def main() -> None:
-    # Создаем приложение и передаем токен бота
+
+def console_sender(application):
+    while True:
+        try:
+            console_input = input("Введите chat_id:сообщение: ")
+            if ":" in console_input:
+                chat_id, message = console_input.split(":", 1)
+                try:
+                    chat_id = int(chat_id.strip())
+                    asyncio.run_coroutine_threadsafe(
+                        application.bot.send_message(chat_id, message.strip()),
+                        application.create_task
+                    )
+                    PrintLogOut(f"Sent to {chat_id}: {message.strip()}")
+                except ValueError:
+                    PrintLogOut("Ошибка: chat_id должен быть числом")
+                except Exception as e:
+                    PrintLogOut(f"Ошибка отправки: {str(e)}")
+            else:
+                PrintLogOut("Используйте формат chat_id:message")
+        except (KeyboardInterrupt, SystemExit):
+            PrintLogOut("Консольный ввод остановлен")
+            break
+        except Exception as e:
+            PrintLogOut(f"Ошибка ввода: {str(e)}")
+
+def main():
     application = Application.builder().token(TOKEN).build()
-
-    # Добавляем обработчики команд
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("debug", debug_command))
-    application.add_handler(CommandHandler("translate", translate_command))
-    application.add_handler(CommandHandler("stoptranslate", stop_translate_command))
     
-    # Добавляем обработчик текстовых сообщений
-    application.add_handler(MessageHandler(filters.ALL, log_message))
+    # Регистрация обработчиков
+    handlers = [
+        CommandHandler("start", start),
+        CommandHandler("help", help_command),
+        CommandHandler("translate", translate_command),
+        CommandHandler("stoptranslate", stop_translate_command),
+        MessageHandler(filters.ALL, handle_message)
+    ]
+    
+    for handler in handlers:
+        application.add_handler(handler)
+    
 
-    # Запускаем поток для консольного ввода
-    console_thread = threading.Thread(target=console_sender, args=(application,), daemon=True)
-    console_thread.start()
-
-    PrintLogOut("Бот запущен и готов к работе...")
-
-    # Запускаем бота
-    application.run_polling()
+    PrintLogOut("Бот запускается...")
+    application.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
+        close_loop=False
+    )
+    PrintLogOut("Бот запущен и готов к работе")
 
 if __name__ == "__main__":
     main()
