@@ -1,1 +1,1 @@
-Ошибка при отправке сообщения: no running event loop
+[sanity]: уиа
